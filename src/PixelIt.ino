@@ -42,6 +42,9 @@ String mqttUser = "";
 String mqttPassword = "";
 String mqttServer = "";
 String mqttMasterTopic = "Haus/PixelIt/";
+String mqttSlaveTopicTemplate = "Haus/PixelIt/%s/";
+String mqttSlaveTopic = ""; // will be set at Runtime
+bool mqttSlaveTopicEnabled = false;
 int mqttPort = 1883;
 int mqttRetryCounter = 0;
 #define MQTT_MAX_RETRYS 3
@@ -92,7 +95,7 @@ int mbaLuxMin = 0;
 int mbaLuxMax = 400;
 int matrixType = 1;
 String note = "";
-String hostname = "PixelIt";
+String hostname = "";
 String matrixTempCorrection = "default";
 
 // System Vars
@@ -211,6 +214,7 @@ void SaveConfig()
 		json["mqttPassword"] = mqttPassword;
 		json["mqttServer"] = mqttServer;
 		json["mqttMasterTopic"] = mqttMasterTopic;
+		json["mqttSlaveTopicTemplate"] = mqttSlaveTopicTemplate;
 		json["mqttPort"] = mqttPort;
 
 #if defined(ESP8266)
@@ -383,6 +387,11 @@ void SetConfigVaribles(JsonObject &json)
 		mqttMasterTopic = json["mqttMasterTopic"].as<char *>();
 	}
 
+	if (json.containsKey("mqttSlaveTopicTemplate"))
+	{
+		mqttSlaveTopicTemplate = json["mqttSlaveTopicTemplate"].as<char *>();
+	}
+
 	if (json.containsKey("mqttPort"))
 	{
 		mqttPort = json["mqttPort"];
@@ -528,31 +537,42 @@ void callback(char *topic, byte *payload, unsigned int length)
 	if (payload[0] == '{')
 	{
 		payload[length] = '\0';
-		String channel = String(topic);
-		channel.replace(mqttMasterTopic, "");
+		String channel = String(topic).substring(String(topic).lastIndexOf("/"));
 
 		DynamicJsonBuffer jsonBuffer;
 		JsonObject &json = jsonBuffer.parseObject(payload);
 
 		Log("MQTT_callback", "Incomming Json length: " + String(json.measureLength()));
 
-		if (channel.equals("setScreen"))
+		if (channel.equals("/setScreen"))
 		{
 			CreateFrames(json);
 		}
-		else if (channel.equals("getLuxsensor"))
+		else if (channel.equals("/getLuxsensor"))
 		{
 			client.publish((mqttMasterTopic + "luxsensor").c_str(), GetLuxSensor().c_str());
+			if (mqttSlaveTopicEnabled)
+			{
+				client.publish((mqttSlaveTopic + "luxsensor").c_str(), GetLuxSensor().c_str());
+			}
 		}
-		else if (channel.equals("getMatrixinfo"))
+		else if (channel.equals("/getMatrixinfo"))
 		{
 			client.publish((mqttMasterTopic + "matrixinfo").c_str(), GetMatrixInfo().c_str());
+			if (mqttSlaveTopicEnabled)
+			{
+				client.publish((mqttSlaveTopic + "matrixinfo").c_str(), GetMatrixInfo().c_str());
+			}
 		}
-		else if (channel.equals("getConfig"))
+		else if (channel.equals("/getConfig"))
 		{
 			client.publish((mqttMasterTopic + "config").c_str(), GetConfig().c_str());
+			if (mqttSlaveTopicEnabled)
+			{
+				client.publish((mqttSlaveTopic + "config").c_str(), GetConfig().c_str());
+			}
 		}
-		else if (channel.equals("setConfig"))
+		else if (channel.equals("/setConfig"))
 		{
 			SetConfig(json);
 		}
@@ -974,11 +994,7 @@ String GetConfig()
 
 		if (!root.containsKey("hostname") || String(root["hostname"].asString()).isEmpty())
 		{
-#if defined(ESP8266)
-			root["hostname"] = WiFi.hostname();
-#elif defined(ESP32)
-			root["hostname"] = WiFi.getHostname();
-#endif
+			root["hostname"] = hostname;
 		}
 
 		String json;
@@ -1034,11 +1050,7 @@ String GetMatrixInfo()
 	root["pixelitVersion"] = VERSION;
 	//// Matrix Config
 	root["note"] = note;
-#if defined(ESP8266)
-	root["hostname"] = WiFi.hostname();
-#elif defined(ESP32)
-	root["hostname"] = WiFi.getHostname();
-#endif
+	root["hostname"] = hostname;
 	root["freeSketchSpace"] = ESP.getFreeSketchSpace();
 	root["wifiRSSI"] = WiFi.RSSI();
 	root["wifiQuality"] = GetRSSIasQuality(WiFi.RSSI());
@@ -1427,12 +1439,12 @@ void MqttReconnect()
 		if (mqttUser != NULL && mqttUser.length() > 0 && mqttPassword != NULL && mqttPassword.length() > 0)
 		{
 			Log(F("MqttReconnect"), F("MQTT connect to server with User and Password"));
-			connected = client.connect(("PixelIt_" + GetChipID()).c_str(), mqttUser.c_str(), mqttPassword.c_str(), "state", 0, true, "diconnected");
+			connected = client.connect(hostname.c_str(), mqttUser.c_str(), mqttPassword.c_str(), "state", 0, true, "disconnected");
 		}
 		else
 		{
 			Log(F("MqttReconnect"), F("MQTT connect to server without User and Password"));
-			connected = client.connect(("PixelIt_" + GetChipID()).c_str(), "state", 0, true, "diconnected");
+			connected = client.connect(hostname.c_str(), "state", 0, true, "disconnected");
 		}
 
 		// Attempt to connect
@@ -1791,10 +1803,11 @@ void setup()
 		ShowBootAnimation();
 	}
 
-	if (!hostname.isEmpty())
+	if (hostname.isEmpty())
 	{
-		WiFi.hostname(hostname);
+		hostname = "PixelIt";
 	}
+	WiFi.hostname(hostname);
 
 	// Set config save notify callback
 	wifiManager.setSaveConfigCallback(SaveConfigCallback);
@@ -1853,6 +1866,13 @@ void setup()
 		client.setCallback(callback);
 		client.setBufferSize(8000);
 		Log(F("Setup"), F("MQTT started"));
+
+		if (!mqttSlaveTopicTemplate.isEmpty())
+		{
+			mqttSlaveTopic = mqttSlaveTopicTemplate;
+			mqttSlaveTopic.replace("%s", hostname);
+			mqttSlaveTopicEnabled = true;
+		}
 	}
 
 	dht.setup(D1, DHTesp::DHT22);
@@ -1997,6 +2017,10 @@ void SendLDR(bool force)
 	if (mqttAktiv == true && mqttRetryCounter < MQTT_MAX_RETRYS && oldGetLuxSensor != luxSensor)
 	{
 		client.publish((mqttMasterTopic + "luxsensor").c_str(), luxSensor.c_str(), true);
+		if (mqttSlaveTopicEnabled)
+		{
+			client.publish((mqttSlaveTopic + "luxsensor").c_str(), luxSensor.c_str(), true);
+		}
 	}
 	// Prüfen ob über Websocket versendet werden muss
 	if (webSocket.connectedClients() > 0 && oldGetLuxSensor != luxSensor)
@@ -2031,6 +2055,10 @@ void SendDHT(bool force)
 	if (mqttAktiv == true && mqttRetryCounter < MQTT_MAX_RETRYS && oldGetDHTSensor != dhtSensor)
 	{
 		client.publish((mqttMasterTopic + "dhtsensor").c_str(), dhtSensor.c_str(), true);
+		if (mqttSlaveTopicEnabled)
+		{
+			client.publish((mqttSlaveTopic + "dhtsensor").c_str(), dhtSensor.c_str(), true);
+		}
 	}
 	// Prüfen ob über Websocket versendet werden muss
 	if (webSocket.connectedClients() > 0 && oldGetDHTSensor != dhtSensor)

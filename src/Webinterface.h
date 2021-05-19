@@ -238,8 +238,12 @@ const char configPage[] PROGMEM = R"=====(
         <input type="password" class="form-control" id="mqttPassword" placeholder="Optional">
     </div>
     <div class="form-group">
-        <label for="mqttMasterTopic">MasterTopic</label>
+        <label for="mqttSlaveTopicTemplate">MasterTopic</label>
         <input type="text" class="form-control" id="mqttMasterTopic">
+    </div>
+     <div class="form-group">
+        <label for="mqttSlaveTopicTemplate">SlaveTopic (%s = Hostname)</label>
+        <input type="text" class="form-control" id="mqttSlaveTopicTemplate">
     </div>
     <div class="custom-control custom-switch">
         <input type="checkbox" class="custom-control-input" id="mqttAktiv">
