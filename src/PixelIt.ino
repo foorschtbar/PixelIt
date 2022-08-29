@@ -2,6 +2,7 @@
 #include <ESP8266WebServer.h>
 #include <ESP8266HTTPUpdateServer.h>
 #include <ESP8266WiFi.h>
+#include <ESP8266HTTPClient.h>
 #include <LittleFS.h>
 
 #elif defined(ESP32)
@@ -40,7 +41,8 @@
 #include "ColorConverterLib.h"
 #include <TimeLib.h>
 #include <ArduinoJson.h>
-#include <ArduinoHttpClient.h>
+
+#include <WiFiClientSecureBearSSL.h>
 #include <Hash.h>
 // PixelIT Stuff
 #include "PixelItFont.h"
@@ -92,8 +94,9 @@ String ldrDevice = "GL5516";
 unsigned long ldrPulldown = 10000; // 10k pulldown-resistor
 unsigned int ldrSmoothing = 0;
 
-String serverAddress = "pixelit.bastelbunker.de";
-int serverPort = 80;
+String telemetryServerHost = "pixelit.bastelbunker.de";
+String telemetryServerURL = "https://" + telemetryServerHost + "/api/telemetry";
+int telemetryServerPort = 443;
 
 String btnPin[] = {"Pin_D0", "Pin_D4", "Pin_D5"};
 bool btnEnabled[] = {false, false, false};
@@ -1730,9 +1733,62 @@ String GetButtons()
 
 void SendTelemetry()
 {
-	HttpClient httpClient = HttpClient(espClient, serverAddress, serverPort);
-	httpClient.sendHeader("User-Agent", "PixelIt");
-	httpClient.post("/api/telemetry", "application/json", GetTelemetry());
+	std::unique_ptr<BearSSL::WiFiClientSecure> bearSSL(new BearSSL::WiFiClientSecure);
+
+	bearSSL->setInsecure(); // client->setFingerprint(fingerprint);
+
+	HTTPClient httpsClient;
+
+	if (!httpsClient.begin(*bearSSL, telemetryServerURL))
+	{
+		Log(F("Telemetry"), F("Connection to API failed!"));
+	}
+	else
+	{
+		Log(F("Telemetry"), F("Connected to API..."));
+
+		httpsClient.addHeader("Content-Type", "application/json");
+		httpsClient.addHeader("User-Agent", "PixelIt");
+		int httpCode = httpsClient.POST(GetTelemetry());
+
+		if (httpCode > 0)
+		{
+			// HTTP header has been send and Server response header has been handled
+			Serial.printf("HTTP Code: %d\n", httpCode);
+			// file found at server
+			if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY)
+			{
+				Log(F("Telemetry"), F("Upload done."));
+			}
+			else
+			{
+				Log(F("Telemetry"), F("Upload failed. Wrong HTTP code."));
+			}
+		}
+		else
+		{
+			Log(F("Telemetry"), "Upload failed: " + httpsClient.errorToString(httpCode));
+		}
+
+		httpsClient.end();
+	}
+
+	//  WiFiClientSecure
+	// if (!httpsClient.connect(telemetryServerHost, telemetryServerPort))
+	//
+	// else
+	// {
+	// 	Log(F("Telemetry"), F("Connected to API..."));
+	// 	String data = GetTelemetry();
+	// 	httpsClient.print(String("POST ") + telemetryServerURL + " HTTP/1.1\r\n" +
+	// 					  "Host: " + telemetryServerHost + "\r\n" +
+	// 					  "User-Agent: PixelIt" + "\r\n" +
+	// 					  "Content-Type: application/json" + "\r\n" +
+	// 					  "Content-Length: " + data.length() + "\r\n\r\n" +
+	// 					  data + "\r\n" +
+	// 					  "Connection: close\r\n\r\n");
+	// 	Log(F("Telemetry"), F("Upload done."));
+	// }
 }
 
 String GetTelemetry()
