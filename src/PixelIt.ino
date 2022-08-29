@@ -46,7 +46,9 @@
 #include "PixelItFont.h"
 #include "Webinterface.h"
 #include "Tools.h"
-#define TELEMETRY_DELAY 10000UL * 6 * 60 * 12 // 12 Houers
+#define TELEMETRY_INTERVAL 1000 * 60 * 60 * 12 // 12 Houers
+#define CHECKUPDATESCREEN_INTERVAL 1000 * 20   // 5 Minutes (CHANGE BEFOR COMMIT)
+#define CHECKUPDATESCREEN_DURATION 1000 * 10   // 5 Seconds (CHANGE BEFOR COMMIT)
 
 #define VERSION "1.1.0_Telemetry"
 
@@ -282,9 +284,14 @@ float temperatureOffset = 0.0f;
 float humidityOffset = 0.0f;
 float pressureOffset = 0.0f;
 float gasOffset = 0.0f;
+
+// Other Vars
 bool sendTelemetry = true;
 unsigned long sendTelemetryPrevMillis = 0;
+unsigned long forcedScreenIsActiveUntil = 0;
 bool checkUpdateScreen = true;
+unsigned long checkUpdateScreenPrevMillis = 0;
+
 // MP3Player Vars
 String OldGetMP3PlayerInfo;
 
@@ -757,7 +764,7 @@ void HandleScreen()
 	if (json.success())
 	{
 		server.send(200, F("application/json"), F("{\"response\":\"OK\"}"));
-		Log(F("HandleScreen"), "Incoming Json length: " + String(json.measureLength()));
+		Log(F("HandleScreen"), "Incoming JSON length: " + String(json.measureLength()));
 		CreateFrames(json);
 	}
 	else
@@ -774,7 +781,7 @@ void HandleSetConfig()
 
 	if (json.success())
 	{
-		Log(F("SetConfig"), "Incoming Json length: " + String(json.measureLength()));
+		Log(F("SetConfig"), "Incoming JSON length: " + String(json.measureLength()));
 		SetConfig(json);
 		server.send(200, F("application/json"), F("{\"response\":\"OK\"}"));
 		delay(500);
@@ -934,7 +941,7 @@ void callback(char *topic, byte *payload, unsigned int length)
 		DynamicJsonBuffer jsonBuffer;
 		JsonObject &json = jsonBuffer.parseObject(payload);
 
-		Log("MQTT_callback", "Incomming Json length: " + String(json.measureLength()));
+		Log("MQTT_callback", "Incomming JSON length: " + String(json.measureLength()));
 
 		if (channel.equals("setScreen"))
 		{
@@ -997,7 +1004,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
 			JsonObject &json = jsonBuffer.parseObject(payload);
 
 			// Logausgabe
-			Log(F("WebSocketEvent"), "Incoming Json length: " + String(json.measureLength()));
+			Log(F("WebSocketEvent"), "Incoming JSON length: " + String(json.measureLength()));
 
 			if (json.containsKey("setScreen"))
 			{
@@ -1047,7 +1054,12 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
 
 void CreateFrames(JsonObject &json)
 {
-	String logMessage = F("Json contains ");
+	CreateFrames(json, 0);
+}
+
+void CreateFrames(JsonObject &json, int forceDuration)
+{
+	String logMessage = F("JSON contains ");
 
 	// Ist eine Display Helligkeit übergeben worden?
 	if (json.containsKey("brightness"))
@@ -1170,7 +1182,7 @@ void CreateFrames(JsonObject &json)
 		matrix->setBrightness(0);
 		matrix->show();
 	}
-	else
+	else if (millis() >= forcedScreenIsActiveUntil)
 	{
 		matrix->setBrightness(currentMatrixBrightness);
 
@@ -1486,8 +1498,17 @@ void CreateFrames(JsonObject &json)
 			matrix->show();
 		}
 	}
+	else
+	{
+		logMessage += F("skipped, because an forced screen is currently being displayed.");
+	}
 
 	Log(F("CreateFrames"), logMessage);
+
+	if (forceDuration > 0)
+	{
+		forcedScreenIsActiveUntil = millis() + forceDuration;
+	}
 }
 
 String GetConfig()
@@ -2781,12 +2802,38 @@ uint ColorWheel(byte wheelPos, int pos)
 
 void ShowBootAnimation()
 {
-	DrawTextHelper("PIXELIT", false, false, false, false, false, false, NULL, 255, 255, 255, 3, 1);
-	FadeIn(60, 10);
-	FadeOut(60, 10);
-	FadeIn(60, 10);
-	FadeOut(60, 10);
-	FadeIn(60, 10);
+	DrawTextHelper("P", false, false, false, false, false, false, NULL, 255, 51, 255, 4, 1);
+	matrix->show();
+
+	delay(200);
+	DrawTextHelper("I", false, false, false, false, false, false, NULL, 0, 255, 42, 8, 1);
+	matrix->show();
+
+	delay(200);
+	DrawTextHelper("X", false, false, false, false, false, false, NULL, 255, 25, 25, 10, 1);
+	matrix->show();
+
+	delay(200);
+	DrawTextHelper("E", false, false, false, false, false, false, NULL, 25, 255, 255, 14, 1);
+	matrix->show();
+
+	delay(200);
+	DrawTextHelper("L", false, false, false, false, false, false, NULL, 255, 221, 51, 18, 1);
+	matrix->show();
+
+	delay(500);
+	DrawTextHelper("I", false, false, false, false, false, false, NULL, 255, 255, 255, 22, 1);
+	DrawTextHelper("T", false, false, false, false, false, false, NULL, 255, 255, 255, 24, 1);
+	matrix->show();
+	delay(1000);
+
+	// FadeIn(60, 10);
+	// DrawTextHelper("PIXELIT", false, false, false, false, false, false, NULL, 255, 255, 255, 3, 1);
+	// FadeIn(60, 10);
+	// FadeOut(60, 10);
+	// FadeIn(60, 10);
+	// FadeOut(60, 10);
+	// FadeIn(60, 10);
 }
 
 ColorTemperature GetUserColorTemp()
@@ -3236,10 +3283,45 @@ void setup()
 	mp3Player.volume(initialVolume);
 }
 
+void displayUpdateScreen()
+{
+
+	// NOT WORKING #1
+	// DynamicJsonBuffer jsonBuffer;
+	// const char *json = "{\"text\":{\"textString\":\"New FW available\",\"hexColor\":\"#FFFFFF\",\"scrollText\":true,\"position\":{\"x\":7,\"y\":1}},\"bitmapAnimation\":{\"animationDelay\":400,\"limitLoops\":0,\"data\":[[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,63488,63488,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,65472,65472,0,0,0,0,0,64896,64896,64896,64896,0,0,0,63488,63488,63488,63488,63488,63488,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2013,2013,0,0,0,0,0,1986,1986,1986,1986,0,0,0,65472,65472,65472,65472,65472,65472,0,0,0,0,64896,64896,0,0,0,0,0,0,63488,63488,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,43039,43039,0,0,0,0,0,383,383,383,383,0,0,0,2013,2013,2013,2013,2013,2013,0,0,0,0,1986,1986,0,0,0,0,0,0,65472,65472,0,0,0,0,0,0,64896,64896,0,0,0,0,0,0,63488,63488,0,0,0],[0,0,63517,63517,63517,63517,0,0,0,43039,43039,43039,43039,43039,43039,0,0,0,0,383,383,0,0,0,0,0,0,2013,2013,0,0,0,0,0,0,1986,1986,0,0,0,0,0,0,65472,65472,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,63517,63517,0,0,0,0,0,0,43039,43039,0,0,0,0,0,0,383,383,0,0,0,0,0,0,2013,2013,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,63517,63517,0,0,0,0,0,0,43039,43039,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]]}}";
+	// JsonObject &root = jsonBuffer.parseObject(json);
+	// root.prettyPrintTo(Serial);
+	// CreateFrames(root, CHECKUPDATESCREEN_DURATION);
+
+	// NOT WORKING #2
+	DynamicJsonBuffer jsonBuffer;
+	JsonObject &root = jsonBuffer.createObject();
+	JsonObject &text = root.createNestedObject("text");
+	text["textString"] = "New FW available";
+	text["hexColor"] = "#FFFFFF";
+	text["scrollText"] = true;
+	JsonObject &position = text.createNestedObject("position");
+	position["x"] = 7;
+	position["y"] = 1;
+	JsonObject &bitmapAnimation = root.createNestedObject("bitmapAnimation");
+	bitmapAnimation["animationDelay"] = 400;
+	bitmapAnimation["limitLoops"] = 0;
+	bitmapAnimation["data"] = RawJson("[[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,63488,63488,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,65472,65472,0,0,0,0,0,64896,64896,64896,64896,0,0,0,63488,63488,63488,63488,63488,63488,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2013,2013,0,0,0,0,0,1986,1986,1986,1986,0,0,0,65472,65472,65472,65472,65472,65472,0,0,0,0,64896,64896,0,0,0,0,0,0,63488,63488,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,43039,43039,0,0,0,0,0,383,383,383,383,0,0,0,2013,2013,2013,2013,2013,2013,0,0,0,0,1986,1986,0,0,0,0,0,0,65472,65472,0,0,0,0,0,0,64896,64896,0,0,0,0,0,0,63488,63488,0,0,0],[0,0,63517,63517,63517,63517,0,0,0,43039,43039,43039,43039,43039,43039,0,0,0,0,383,383,0,0,0,0,0,0,2013,2013,0,0,0,0,0,0,1986,1986,0,0,0,0,0,0,65472,65472,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,63517,63517,0,0,0,0,0,0,43039,43039,0,0,0,0,0,0,383,383,0,0,0,0,0,0,2013,2013,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,63517,63517,0,0,0,0,0,0,43039,43039,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]]");
+	root.prettyPrintTo(Serial);
+	CreateFrames(root, CHECKUPDATESCREEN_DURATION);
+}
+
 void loop()
 {
 	server.handleClient();
 	webSocket.loop();
+
+	// Check new Firmware Version
+	if (checkUpdateScreen == true && millis() - checkUpdateScreenPrevMillis >= CHECKUPDATESCREEN_INTERVAL)
+	{
+		checkUpdateScreenPrevMillis = millis();
+		displayUpdateScreen();
+	}
 
 	// Reset GPIO based on the array, as far as something is present in the array.
 	for (int i = 0; i < SET_GPIO_SIZE; i++)
@@ -3257,7 +3339,7 @@ void loop()
 	}
 
 	// Send Telemetry data
-	if (sendTelemetry == true && (sendTelemetryPrevMillis == 0 || millis() - sendTelemetryPrevMillis >= TELEMETRY_DELAY))
+	if (sendTelemetry == true && (sendTelemetryPrevMillis == 0 || millis() - sendTelemetryPrevMillis >= TELEMETRY_INTERVAL))
 	{
 		sendTelemetryPrevMillis = millis();
 		SendTelemetry();
