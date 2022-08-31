@@ -46,10 +46,11 @@
 #include "PixelItFont.h"
 #include "Webinterface.h"
 #include "Tools.h"
-#define TELEMETRY_INTERVAL 1000 * 60 * 60 * 12 // 12 Houers
-#define CHECKUPDATE_INTERVAL 1000 * 100        // 8 Hours (CHANGE TO RIGHT VAL BEFOR COMMIT)
-#define CHECKUPDATESCREEN_INTERVAL 1000 * 60   // 5 Minutes (CHANGE TO RIGHT VAL BEFOR COMMIT)
-#define CHECKUPDATESCREEN_DURATION 1000 * 10   // 5 Seconds (CHANGE TO RIGHT VAL BEFOR COMMIT)
+#include "UpdateScreen.h"
+#define TELEMETRY_INTERVAL 1000 * 60 * 60 * 12   // 12 Houers
+#define CHECKUPDATE_INTERVAL 1000 * 60 * 6 * 8   // 8 Hours
+#define CHECKUPDATESCREEN_INTERVAL 1000 * 60 * 5 // 5 Minutes
+#define CHECKUPDATESCREEN_DURATION 1000 * 5      // 5 Seconds
 
 #define VERSION "1.1.0_Telemetry"
 
@@ -101,8 +102,8 @@ unsigned int ldrSmoothing = 0;
 #define TELEMETRY_SERVER_PORT 80
 
 // Check Update API
-#define CHECKUPDATE_SERVER_HOST "dev.spaps.de"         // "pixelit.bastelbunker.de "
-#define CHECKUPDATE_SERVER_PATH "/pixelit/release.php" // "/api/lastrelease"
+#define CHECKUPDATE_SERVER_HOST "pixelit.bastelbunker.de"
+#define CHECKUPDATE_SERVER_PATH "/api/lastversion"
 #define CHECKUPDATE_SERVER_PORT 80
 
 String btnPin[] = {"Pin_D0", "Pin_D4", "Pin_D5"};
@@ -1070,6 +1071,7 @@ void CreateFrames(JsonObject &json)
 
 void CreateFrames(JsonObject &json, int forceDuration)
 {
+
     String logMessage = F("JSON contains ");
 
     // Ist eine Display Helligkeit übergeben worden?
@@ -3299,10 +3301,20 @@ void setup()
 void displayUpdateScreen()
 {
     Log(F("UpdateScreen"), F("Display UpdateScreen..."));
+
     DynamicJsonBuffer jsonBuffer;
-    const char json[] = "{\"text\":{\"textString\":\"New FW available\",\"hexColor\":\"#FFFFFF\",\"scrollText\":true,\"position\":{\"x\":7,\"y\":1}},\"bitmapAnimation\":{\"animationDelay\":400,\"limitLoops\":0,\"data\":[[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,63488,63488,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,65472,65472,0,0,0,0,0,64896,64896,64896,64896,0,0,0,63488,63488,63488,63488,63488,63488,0],[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2013,2013,0,0,0,0,0,1986,1986,1986,1986,0,0,0,65472,65472,65472,65472,65472,65472,0,0,0,0,64896,64896,0,0,0,0,0,0,63488,63488,0,0,0],[0,0,0,0,0,0,0,0,0,0,0,43039,43039,0,0,0,0,0,383,383,383,383,0,0,0,2013,2013,2013,2013,2013,2013,0,0,0,0,1986,1986,0,0,0,0,0,0,65472,65472,0,0,0,0,0,0,64896,64896,0,0,0,0,0,0,63488,63488,0,0,0],[0,0,63517,63517,63517,63517,0,0,0,43039,43039,43039,43039,43039,43039,0,0,0,0,383,383,0,0,0,0,0,0,2013,2013,0,0,0,0,0,0,1986,1986,0,0,0,0,0,0,65472,65472,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,63517,63517,0,0,0,0,0,0,43039,43039,0,0,0,0,0,0,383,383,0,0,0,0,0,0,2013,2013,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,63517,63517,0,0,0,0,0,0,43039,43039,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]]}}";
-    JsonObject &root = jsonBuffer.parseObject(json);
-    CreateFrames(root, CHECKUPDATESCREEN_DURATION);
+    JsonObject &root = jsonBuffer.createObject();
+
+    BuildUpdateScreenJSON(root);
+
+    if (root.success())
+    {
+        CreateFrames(root, CHECKUPDATESCREEN_DURATION);
+    }
+    else
+    {
+        Log(F("UpdateScreen"), F("Failed to Build UpdateScreen JSON"));
+    }
 }
 
 void checkUpdate()
@@ -3323,9 +3335,9 @@ void checkUpdate()
     {
         DynamicJsonBuffer jsonBuffer;
         JsonObject &root = jsonBuffer.parseObject(response);
-        if (root.containsKey("tag_name"))
+        if (root.containsKey("version"))
         {
-            lastReleaseVersion = root["tag_name"].as<String>();
+            lastReleaseVersion = root["version"].as<String>();
             if (!lastReleaseVersion.equals(VERSION))
             {
                 Log(F("CheckUpdate"), F("New FW available"));
@@ -3362,20 +3374,25 @@ void loop()
         }
     }
 
-    // Check new FW Version
-    if (millis() - checkUpdatePrevMillis >= CHECKUPDATE_INTERVAL)
+    // Check and display if new FW version is available.
+    if (checkUpdateScreen == true)
     {
-        checkUpdatePrevMillis = millis();
-        checkUpdate();
-    }
 
-    // Display new FW Version
-    if (checkUpdateScreen == true && millis() - checkUpdateScreenPrevMillis >= CHECKUPDATESCREEN_INTERVAL)
-    {
-        checkUpdateScreenPrevMillis = millis();
-        if (!lastReleaseVersion.equals(VERSION))
+        // Check new FW Version
+        if (checkUpdatePrevMillis == 0 || millis() - checkUpdatePrevMillis >= CHECKUPDATE_INTERVAL)
         {
-            displayUpdateScreen();
+            checkUpdatePrevMillis = millis();
+            checkUpdate();
+        }
+
+        // Display new FW nersion
+        if (millis() - checkUpdateScreenPrevMillis >= CHECKUPDATESCREEN_INTERVAL)
+        {
+            checkUpdateScreenPrevMillis = millis();
+            if (!lastReleaseVersion.equals(VERSION))
+            {
+                displayUpdateScreen();
+            }
         }
     }
 
